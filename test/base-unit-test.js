@@ -5,7 +5,7 @@ const hre = require("hardhat");
 
 describe("Trustless AssetLock", function () {
   let alice, bob;  
-  let lock, dai, weth, vault;
+  let nonce, lock, dai, vault;
   
   let charlie = "0x0a4c79cE84202b03e95B7a692E5D728d83C44c76";
   let charlieSigner;
@@ -18,14 +18,12 @@ describe("Trustless AssetLock", function () {
     });
     charlieSigner = await ethers.provider.getSigner(charlie);
     let daiAddress = "0x6B175474E89094C44Da98b954EedeAC495271d0F";
-    let wethAddress = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
 
     const TrustlessLock = await ethers.getContractFactory("AssetLockFactory");
     lock = await TrustlessLock.deploy();
     await lock.deployed();
     console.log("Trustless lock address is: ", lock.address)
     dai = await ethers.getContractAt("IERC20", daiAddress);
-    weth = await ethers.getContractAt("IERC20", wethAddress);
   });
 
   it("should allow a user to deposit funds", async function(){
@@ -36,24 +34,46 @@ describe("Trustless AssetLock", function () {
     expect(event[0].args.depositor).to.equal(charlie);
     expect(event[0].args.beneficiary).to.equal(alice.address);
     expect(event[0].args.token).to.equal(dai.address);
+    nonce = event[0].args.nonce;
+    console.log("Nonce is: ", nonce.toString())
+
+    const item = await lock.userToIdToRequest(charlie, nonce.toString());
+    // console.log(item)
+    expect(item.creator).to.equal(charlie);
+    expect(item.unlocker).to.equal(alice.address);
+    expect(item.token).to.equal(dai.address);
+    expect(item.lockedValue).to.equal(deposit);
   })
 
   it("should initiate WETH swap", async function () {
     
-    await lock.connect(charlieSigner).initiateSwap(alice.address, dai.address, 1);
+    await lock.connect(charlieSigner).initiateSwap(nonce.toString(), 1);
 
     const SwapEvent = lock.filters.Swapped();
     const swapped = await lock.queryFilter(SwapEvent, "latest")
     expect(swapped[0].args.caller).to.equal(charlie);
-    vault = swapped[0].args.vault;
+    expect(swapped[0].args.recipient).to.equal(alice.address);
+    expect(swapped[0].args.token).to.equal(dai.address);
 
+    const item = await lock.userToIdToRequest(charlie, nonce.toString())
+    expect(item.creator).to.equal(charlie);
+    expect(item.unlocker).to.equal(alice.address);
+    expect(item.token).to.equal(dai.address);
+    expect(item.lockedValue).to.equal(0);
+    // address creator;
+    //     address unlocker;
+    //     address token;
+    //     uint unlockTime;
+    //     uint lockedValue;
+    //     uint destinationTokenValue;
     
   });
 
   it("should NOT allow charlie withdraw before unlock timeout", async function(){
     try {
-      await lock.connect(charlieSigner).withdraw(charlie, alice.address, dai.address);
+      await lock.connect(charlieSigner).withdraw(charlie, nonce.toString());
     } catch (error) {
+      // console.log(error.message)
       assert(error.message.includes("Wait until timeout!"));
       return;
     }
@@ -66,14 +86,7 @@ describe("Trustless AssetLock", function () {
       unlockerDaiBalanceBefore.toString()
     );
 
-    const vaultDaiBalanceBefore = await dai.balanceOf(vault);
-    console.log(
-      "Vault's DAI balance before withdraw is: ",
-      vaultDaiBalanceBefore.toString()
-    );
-    // await dai.approve(alice.address, vaultDaiBalanceBefore);
-    // await dai.transferFrom(vault, alice.address, vaultDaiBalanceBefore);
-    await lock.connect(alice).withdraw(charlie, alice.address, dai.address);
+    await lock.connect(alice).withdraw(charlie, nonce.toString());
     
    
 
@@ -94,16 +107,24 @@ describe("Trustless AssetLock", function () {
     expect(event[0].args.depositor).to.equal(bob.address);
     expect(event[0].args.beneficiary).to.equal(alice.address);
     expect(event[0].args.token).to.equal(dai.address);
+    nonce = event[0].args.nonce;
+
+    const item = await lock.userToIdToRequest(bob.address, nonce.toString());
+    // console.log(item)
+    expect(item.creator).to.equal(bob.address);
+    expect(item.unlocker).to.equal(alice.address);
+    expect(item.token).to.equal(dai.address);
+    expect(item.lockedValue).to.equal(deposit);
     
     const bobDaiBalanceBefore = await dai.balanceOf(bob.address);
     console.log("Bob's DAI balance before unlock is: ", bobDaiBalanceBefore.toString());
 
-    await lock.connect(bob).initiateSwap(alice.address, dai.address, 1);
+    await lock.connect(bob).initiateSwap(nonce.toString(), 1);
 
     await ethers.provider.send("evm_increaseTime", [2 * 60 * 60]);
     await ethers.provider.send("evm_mine");
 
-    await lock.connect(bob).withdraw(bob.address, alice.address, dai.address);
+    await lock.connect(bob).withdraw(bob.address, nonce.toString());
 
     const bobDaiBalanceAfter = await dai.balanceOf(bob.address);
     console.log("Bob's DAI balance after unlock is: ", bobDaiBalanceAfter.toString());
